@@ -75,14 +75,8 @@ This section details every step required to perform local optimizations in a Jup
 
 --- 
 
-Below is the complete Markdown content formatted as plain text. Save the output into a file (e.g., `README_first_steps.md.txt`).
 
-```
 # First Steps: Local Optimization & Mobile Deployment Demo
-
-This section details every step required to perform local optimizations in a Jupyter Notebook and then deploy a Stable Diffusion model—fine-tuned to generate images of dogs—on a mobile application. We also include instructions for precise latency tracking of both the unoptimized and optimized models.
-
----
 
 ## 1. Environment Setup
 
@@ -109,7 +103,7 @@ This section details every step required to perform local optimizations in a Jup
    pip install jupyterlab matplotlib numpy
    pip install tensorflow tensorflow-lite  # For later conversion to TFLite
    pip install ai-edge-torch  # Hypothetical package for AI Edge Torch Generative API
-   ```
+
 
 3. **Launch Jupyter Notebook:**
 
@@ -132,6 +126,157 @@ This section details every step required to perform local optimizations in a Jup
 ---
 
 ## 3. Fine-Tuning Stable Diffusion on Dog Images
+
+---
+
+1. **Begin Optional Custom Model Finetuning**
+
+In this example, we use the Oxford-IIIT Pet Dataset—a well-known dataset containing images of various pets (with a strong focus on dogs and cats). You can download it from [here](http://www.robots.ox.ac.uk/~vgg/data/pets/).
+
+## Fine-Tuning Stable Diffusion on Dog Images
+
+In this section, we will fine-tune a pre-trained Stable Diffusion model on a dataset of dog images. We will use the [Oxford-IIIT Pet Dataset](http://www.robots.ox.ac.uk/~vgg/data/pets/) as our source. (Note that while the dataset contains both dogs and cats, you can filter or label the images to only use dog images during training.)
+
+### Steps for Fine-Tuning
+
+1. **Download and Prepare the Dataset:**
+   - Download the Oxford-IIIT Pet Dataset from [this link](http://www.robots.ox.ac.uk/~vgg/data/pets/).
+   - Extract the images and annotations.
+   - (Optional) Filter the dataset to only include dog images. You can do this by using the provided annotations or by manually selecting folders corresponding to dog breeds.
+   - Resize the images to the target resolution (e.g., 512×512 pixels). You can use a simple Python script with PIL or OpenCV:
+
+   ```python
+     from PIL import Image
+     import os
+
+     input_folder = "path/to/extracted/images"
+     output_folder = "data/dogs"
+     os.makedirs(output_folder, exist_ok=True)
+
+     for file_name in os.listdir(input_folder):
+         if file_name.endswith(".jpg"):
+             image_path = os.path.join(input_folder, file_name)
+             img = Image.open(image_path).convert("RGB")
+             img = img.resize((512, 512))
+             # Optionally, filter based on breed or use a pre-built classifier to select dog images.
+             img.save(os.path.join(output_folder, file_name))
+     ```
+
+2. **Set Up Your Fine-Tuning Environment in a Jupyter Notebook:**
+
+   Ensure you have installed all necessary packages (see Environment Setup in the previous section).
+
+3. **Load the Pre-trained Stable Diffusion Model:**
+
+   ```python
+   from diffusers import StableDiffusionPipeline
+   import torch
+
+   # Load pre-trained model (ensure you have sufficient GPU memory)
+   model_id = "CompVis/stable-diffusion-v1-4"
+   pipe = StableDiffusionPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
+   pipe.to("cuda")
+   ```
+
+4. **Prepare a Custom Dataset and DataLoader:**
+
+   Create a PyTorch dataset to load images from your dog images folder:
+
+   ```python
+   import os
+   from PIL import Image
+   from torch.utils.data import Dataset, DataLoader
+   import torchvision.transforms as transforms
+
+   class DogDataset(Dataset):
+       def __init__(self, image_folder, transform=None):
+           self.image_folder = image_folder
+           self.image_files = [os.path.join(image_folder, file)
+                               for file in os.listdir(image_folder) if file.endswith(".jpg")]
+           self.transform = transform
+
+       def __len__(self):
+           return len(self.image_files)
+
+       def __getitem__(self, idx):
+           img_path = self.image_files[idx]
+           img = Image.open(img_path).convert("RGB")
+           if self.transform:
+               img = self.transform(img)
+           return img
+
+   transform = transforms.Compose([
+       transforms.Resize((512, 512)),
+       transforms.ToTensor(),
+       transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
+   ])
+
+   dataset = DogDataset("data/dogs", transform=transform)
+   dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
+   ```
+
+5. **Define a Fine-Tuning Training Loop:**
+
+   You can now create a training loop. Note that fine-tuning diffusion models requires adjusting both the denoising network and possibly the text conditioning (if you’re using text prompts). For simplicity, the following example shows a basic training loop outline:
+
+   ```python
+   import torch.optim as optim
+
+   # Define optimizer (you might want to use a lower learning rate for fine-tuning)
+   optimizer = optim.Adam(pipe.unet.parameters(), lr=1e-5)
+
+   num_epochs = 3  # Adjust epochs as needed
+   device = "cuda"
+
+   pipe.unet.train()  # Set the UNet to training mode
+
+   for epoch in range(num_epochs):
+       for batch in dataloader:
+           # Move batch to device
+           batch = batch.to(device)
+           
+           # Sample random noise and timesteps for diffusion training
+           noise = torch.randn(batch.shape, device=device)
+           timesteps = torch.randint(0, 1000, (batch.shape[0],), device=device)
+
+           # Predict noise using the UNet of the diffusion pipeline
+           loss = pipe.unet(batch, timesteps, noise).loss
+
+           optimizer.zero_grad()
+           loss.backward()
+           optimizer.step()
+
+           print(f"Epoch: {epoch}, Loss: {loss.item()}")
+
+   # After training, save a fine-tuned checkpoint:
+   fine_tuned_checkpoint = "fine_tuned_dog_model"
+   pipe.save_pretrained(fine_tuned_checkpoint)
+   ```
+
+6. **Reload the Fine-Tuned Model:**
+
+   ```python
+   # Reload the fine-tuned model for inference
+   pipe = StableDiffusionPipeline.from_pretrained(fine_tuned_checkpoint, torch_dtype=torch.float16)
+   pipe.to("cuda")
+   ```
+
+7. **Test Generation on Dog Prompts:**
+
+   ```python
+   prompt = "A cute dog playing in a sunny park"
+   image = pipe(prompt).images[0]
+   image.save("fine_tuned_dog.png")
+   ```
+
+### Dataset Recommendation
+
+For this fine-tuning demo, we recommend using the **Oxford-IIIT Pet Dataset**. It is freely available and contains a diverse set of pet images, including a large number of dog images. Download it from:  
+[http://www.robots.ox.ac.uk/~vgg/data/pets/](http://www.robots.ox.ac.uk/~vgg/data/pets/)
+
+1. **END CUSTOM FINETUNING** 
+
+---
 
 1. **Load a Pre-trained Stable Diffusion Model:**
    - Use the [diffusers](https://huggingface.co/docs/diffusers/index) library to load a pre-trained checkpoint.
@@ -275,7 +420,7 @@ To simulate the GPU-aware optimizations from the paper (e.g., specialized fused 
    - For iOS:
      - Add the TFLite model to the Xcode project.
      - Use the [TensorFlow Lite Swift API](https://www.tensorflow.org/lite/guide/inference_ios) to load and run the model.
-   
+
 2. **Implement Latency Tracking on Mobile:**
    - Instrument the inference call by recording timestamps before and after the `interpreter.run(...)` call.
    - For example, on Android:
@@ -306,6 +451,5 @@ To simulate the GPU-aware optimizations from the paper (e.g., specialized fused 
   - Convert the optimized PyTorch model to a multi-signature TFLite model using the AI Edge Torch Generative API.
   - Integrate the TFLite model into a mobile application (Android/iOS).
   - Use platform-specific tools to track inference latency on device, demonstrating the performance gains.
-
 
 ---
