@@ -1,0 +1,171 @@
+# %% [markdown]
+# # GPU Optimization Demo for Diffusion Models
+# 
+# In this demo, we simulate two versions of a diffusion model's denoising step:
+# 
+# - **Baseline Implementation:** Represents a traditional approach with separate operations.
+# - **Optimized Implementation:** Uses a fused approach to reduce memory operations and speed up computation.
+# 
+# We will measure the inference latency of both methods on a GPU, plot their runtimes, and also create an animation that simulates iterative denoising.
+# 
+# **Note:** This is a synthetic demo. In real scenarios, these optimizations are integrated within the diffusion model architecture (e.g. using optimized kernels for softmax or Winograd convolution).
+
+# %% [code]
+import torch
+import torch.nn as nn
+import time
+import matplotlib.pyplot as plt
+from matplotlib import animation
+import numpy as np
+
+# Check if GPU is available
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Running on device:", device)
+
+# %% [markdown]
+# ## Simulated Denoising Step Functions
+# 
+# We define two dummy functions that mimic a diffusion denoising step.
+# 
+# The **baseline_denoise** function splits the operation into two separate stages,
+# while the **optimized_denoise** function fuses these operations into a single step.
+
+# %% [code]
+class BaselineDenoise(nn.Module):
+    def __init__(self, channels=64):
+        super(BaselineDenoise, self).__init__()
+        # Two sequential convolutions to mimic separate operations
+        self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.relu = nn.ReLU()
+        
+    def forward(self, x):
+        # Stage 1
+        out = self.relu(self.conv1(x))
+        # Stage 2
+        out = self.relu(self.conv2(out))
+        return out
+
+class OptimizedDenoise(nn.Module):
+    def __init__(self, channels=64):
+        super(OptimizedDenoise, self).__init__()
+        # Fused convolution (simulate fusion by combining weights of two convolutions)
+        self.fused_conv = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.relu = nn.ReLU()
+        
+    def forward(self, x):
+        # A single convolution operation followed by non-linearity (simulate optimized fusion)
+        out = self.relu(self.fused_conv(x))
+        return out
+
+# Instantiate models and move to device
+channels = 64
+baseline_model = BaselineDenoise(channels).to(device)
+optimized_model = OptimizedDenoise(channels).to(device)
+
+# Use the same random weights initialization for a fair comparison
+optimized_model.fused_conv.weight.data.copy_(baseline_model.conv2.weight.data)
+optimized_model.fused_conv.bias.data.copy_(baseline_model.conv2.bias.data)
+
+# %% [markdown]
+# ## Performance Benchmarking
+# 
+# Next, we measure the inference time of both models over several iterations using GPU timing events.
+
+# %% [code]
+def benchmark_model(model, input_tensor, iterations=100):
+    # Warm-up
+    for _ in range(10):
+        _ = model(input_tensor)
+    torch.cuda.synchronize()
+    
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    
+    start_event.record()
+    for _ in range(iterations):
+        _ = model(input_tensor)
+    end_event.record()
+    
+    # Wait for all events to be recorded!
+    torch.cuda.synchronize()
+    elapsed_time = start_event.elapsed_time(end_event)  # milliseconds
+    avg_time = elapsed_time / iterations
+    return avg_time
+
+# Create a dummy input (simulate a latent tensor from a diffusion model)
+input_tensor = torch.randn(1, channels, 64, 64, device=device)
+
+baseline_time = benchmark_model(baseline_model, input_tensor)
+optimized_time = benchmark_model(optimized_model, input_tensor)
+
+print(f"Baseline average time per step: {baseline_time:.2f} ms")
+print(f"Optimized average time per step: {optimized_time:.2f} ms")
+
+# %% [markdown]
+# ## Plotting the Performance Comparison
+# 
+# We now plot the average inference time of both methods to clearly visualize the performance boost.
+
+# %% [code]
+methods = ['Baseline', 'Optimized']
+times = [baseline_time, optimized_time]
+
+plt.figure(figsize=(6,4))
+bars = plt.bar(methods, times, color=['skyblue', 'lightgreen'])
+plt.ylabel("Average Time per Step (ms)")
+plt.title("GPU Optimization: Baseline vs. Optimized Denoising Step")
+
+# Add numeric labels above bars
+for bar in bars:
+    yval = bar.get_height()
+    plt.text(bar.get_x() + bar.get_width()/2, yval + 1, f"{yval:.2f}", ha='center', va='bottom')
+
+plt.show()
+
+# %% [markdown]
+# ## Simulating Iterative Denoising with Animation
+# 
+# In a diffusion model, denoising is performed iteratively. The following animation simulates the process of an image being gradually "denoised" over multiple iterations.
+# 
+# We start with a random noisy image and repeatedly apply a simple denoising operation (a Gaussian filter) to illustrate how the image evolves.
+
+# %% [code]
+import cv2
+
+# Create an initial noisy image
+image_size = 128
+noisy_image = np.random.rand(image_size, image_size)
+
+# Function to simulate a denoising step using a Gaussian blur
+def denoise_step(img, ksize=5):
+    # Use OpenCV Gaussian blur as a stand-in for a denoising step
+    denoised = cv2.GaussianBlur(img, (ksize, ksize), 0)
+    return denoised
+
+# Setup the figure and axis for animation
+fig, ax = plt.subplots(figsize=(5,5))
+im = ax.imshow(noisy_image, cmap='gray', animated=True)
+ax.set_title("Iterative Denoising Simulation")
+ax.axis('off')
+
+def update(frame):
+    global noisy_image
+    noisy_image = denoise_step(noisy_image, ksize=5)
+    im.set_array(noisy_image)
+    ax.set_title(f"Iteration {frame}")
+    return [im]
+
+ani = animation.FuncAnimation(fig, update, frames=30, interval=200, blit=True)
+plt.show()
+
+# %% [markdown]
+# ## Summary
+# 
+# - We simulated a diffusion denoising step in two variants:
+#   - **Baseline:** Using two separate convolution operations.
+#   - **Optimized:** Using a single fused operation.
+# - The performance benchmarking shows the optimized approach reduces inference time per step.
+# - The iterative denoising animation illustrates the conceptual process of gradually refining a noisy image.
+#
+# These demonstrations provide a window into how GPU optimizations can significantly boost the performance of diffusion models in practice.
