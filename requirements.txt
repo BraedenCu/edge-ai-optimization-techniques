@@ -1,0 +1,29 @@
+# Core PyTorch dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+
+# Scientific computing and visualization
+numpy>=1.21.0
+matplotlib>=3.5.0
+scipy>=1.7.0
+
+# Stable Diffusion and related libraries
+diffusers>=0.21.0
+transformers>=4.30.0
+accelerate>=0.20.0
+xformers>=0.0.20
+
+# Image processing
+Pillow>=9.0.0
+
+# Optional: For interactive demos
+gradio>=3.40.0
+
+# Optional: For additional optimizations
+triton>=2.0.0
+
+# Development and testing
+pytest>=7.0.0
+black>=22.0.0
+flake8>=5.0.0 
